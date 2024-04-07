@@ -2,23 +2,21 @@ use std::cmp;
 
 use bevy::prelude::*;
 
-const MAX_WIDTH: i32 = 100;
-const MAX_HEIGHT: i32 = 60;
+const MAX_WIDTH: usize = 100; // how many cells wide the board is
+const MAX_HEIGHT: usize = 60; // how many cells tall the board is
 
-const FRAME_TIME: f32 = 0.2;
+const TICK_TIME: f32 = 0.1; // how many seconds until next tick is processed
 
-const GROWTH_SPEED: f32 = 10.0;
-
-const DECAY_TIME: i32 = (GROWTH_SPEED / (1.0 / FRAME_TIME)) as i32;
+const DECAY_TICKS: u32 = 10; // how many ticks a cell will decay for
 
 const DEAD_COLOR: Color = Color::rgb(0.25, 0.25, 0.25);
 const ALIVE_COLOR: Color = Color::rgb(0.75, 0.75, 0.75);
 
 struct Cell {
     decaying: bool,
-    decaying_time: i32,
+    decaying_ticks: u32,
     dead: bool,
-    neighbors: i32,
+    neighbors: u32,
 }
 
 #[derive(Component)]
@@ -29,7 +27,7 @@ impl Default for Cell {
         Cell {
             decaying: true,
             dead: true,
-            decaying_time: 0,
+            decaying_ticks: 0,
             neighbors: 0,
         }
     }
@@ -38,51 +36,47 @@ impl Default for Cell {
 #[derive(Resource)]
 struct Board(Vec<Vec<Cell>>);
 
-fn is_cell_adjacent(cell_position: (i32, i32), other_position: (i32, i32)) -> bool {
-    let x_dist = (cell_position.0 - other_position.0).abs();
-    let y_dist = (cell_position.1 - other_position.1).abs();
-    return x_dist == 1 && y_dist < 2 || y_dist == 1 && x_dist < 2;
-}
-
-fn limited_positive_range(start: i32, end: i32, max: i32) -> std::ops::Range<i32> {
+/**
+ * Returns a range that is limited to the positive range of \[0, max\]
+ */
+fn limited_positive_range(start: usize, end: usize, max: usize) -> std::ops::Range<usize> {
     return cmp::max(start, 0)..cmp::min(end, max);
 }
 
-fn count_neighbors(mut board: ResMut<Board>) {
+fn count_neighbors(board: &mut ResMut<Board>) {
     for x in 0..MAX_WIDTH {
         for y in 0..MAX_HEIGHT {
-            let mut neighbors = 0;
-            for other_x in limited_positive_range(x - 1, x + 1, MAX_WIDTH) {
-                for other_y in limited_positive_range(y - 1, y + 1, MAX_HEIGHT) {
-                    if board.0[other_x as usize][other_y as usize].dead {
-                        continue;
-                    }
-                    if is_cell_adjacent((x, y), (other_x, other_y)) {
-                        neighbors += 1;
-                    }
-                }
+            count_cell_neighbors(board, x, y);
+        }
+    }
+}
+
+fn count_cell_neighbors(board: &mut ResMut<Board>, x: usize, y: usize) {
+    for adjacent_x in limited_positive_range(x - 1, x + 1, MAX_WIDTH) {
+        for adjacent_y in limited_positive_range(y - 1, y + 1, MAX_HEIGHT) {
+            if !board.0[adjacent_x][adjacent_y].dead {
+                board.0[x][y].neighbors += 1;
             }
-            board.0[x as usize][y as usize].neighbors = neighbors;
         }
     }
 }
 
 #[derive(Component, Debug)]
 struct Position {
-    x: i32,
-    y: i32,
+    x: usize,
+    y: usize,
 }
 
-fn should_start_alive(x: i32, y: i32) -> bool {
+fn should_start_alive(x: usize, y: usize) -> bool {
     return (x - 20) * (x - 20) + (y - 20) * (y - 20) < 5 * 5 && x % 3 != 0;
 }
 
-fn should_stay_alive(neighbors: i32) -> bool {
+fn should_stay_alive(neighbors: u32) -> bool {
     return neighbors == 2 || neighbors == 3;
 }
 
-fn should_spawn(neighbors: i32) -> bool {
-    return neighbors == 1;
+fn should_spawn(neighbors: u32) -> bool {
+    return neighbors > 1;
 }
 
 fn create_board() -> Board {
@@ -93,13 +87,13 @@ fn create_board() -> Board {
             let mut cell = Cell {
                 decaying: true,
                 dead: true,
-                decaying_time: 0,
+                decaying_ticks: 0,
                 neighbors: 0,
             };
             if should_start_alive(x, y) {
                 cell.decaying = false;
                 cell.dead = false;
-                cell.decaying_time = DECAY_TIME;
+                cell.decaying_ticks = DECAY_TICKS;
             }
             column.push(cell);
         }
@@ -114,37 +108,6 @@ struct PrintTimer(Timer);
 
 #[derive(Resource)]
 struct FrameTimer(Timer);
-
-// fn print_cells(time: Res<Time>, mut timer: ResMut<PrintTimer>, board: Res<Board>) {
-//     if !timer.0.tick(time.delta()).just_finished() {
-//         return;
-//     }
-
-//     let mut everybody_dies = true;
-
-//     for x in 0..MAX_WIDTH {
-//         for y in 0..MAX_HEIGHT {
-//             let is_dead = board.0[x as usize][y as usize].decaying
-//                 && board.0[x as usize][y as usize].decaying_time == 0;
-//             if is_dead {
-//                 continue;
-//             }
-//             everybody_dies = false;
-//             print!("Cell at ({}, {})", x, y);
-//             let cell = &board.0[x as usize][y as usize];
-//             if !cell.decaying {
-//                 print!(" is not decaying");
-//             } else {
-//                 print!(" is decaying in {} frames", cell.decaying_time);
-//             }
-//             println!(", and has {} neighbors", cell.neighbors);
-//         }
-//     }
-
-//     if everybody_dies {
-//         println!("Everybody dies!");
-//     }
-// }
 
 fn setup(mut commands: Commands) {
     //init camera
@@ -177,59 +140,62 @@ fn setup(mut commands: Commands) {
     }
 }
 
-fn spawn_cells(
-    time: Res<Time>,
-    mut timer: ResMut<FrameTimer>,
-    // mut commands: Commands,
-    mut sprite_query: Query<(&mut Sprite, &Position)>,
-    mut board: ResMut<Board>,
-) {
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
-
+fn spawn_cells(board: &mut ResMut<Board>, sprite_query: &mut Query<(&mut Sprite, &Position)>) {
     for x in 0..MAX_WIDTH {
         for y in 0..MAX_HEIGHT {
             let cell = &mut board.0[x as usize][y as usize];
-            let is_dead = cell.decaying && cell.decaying_time == 0;
-            if !is_dead {
+            if !cell.dead {
                 continue;
             }
 
             if should_spawn(cell.neighbors) {
                 cell.decaying = false;
                 cell.dead = false;
-                cell.decaying_time = DECAY_TIME;
+                cell.decaying_ticks = DECAY_TICKS;
                 let (mut sprite, _) = sprite_query
                     .iter_mut()
                     .find(|(_, position)| position.x == x && position.y == y)
                     .expect("Cell sprite not found");
                 sprite.color = ALIVE_COLOR;
-                // cell_sprite.sprite_bundle.sprite.color = Color::rgb(0.75, 0.75, 0.75);
             }
         }
     }
 }
 
-fn decay_cells(time: Res<Time>, mut timer: ResMut<FrameTimer>, mut board: ResMut<Board>) {
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
-
+fn decay_cells(board: &mut ResMut<Board>) {
     for x in 0..MAX_WIDTH {
         for y in 0..MAX_HEIGHT {
             let cell = &mut board.0[x as usize][y as usize];
             if (!should_stay_alive(cell.neighbors)) && !cell.decaying {
                 cell.decaying = true;
             }
-            if cell.decaying && cell.decaying_time > 0 {
-                cell.decaying_time -= 1;
+            if cell.decaying && cell.decaying_ticks > 0 {
+                cell.decaying_ticks -= 1;
             }
         }
     }
 }
 
-fn kill_cells(
+fn kill_cells(board: &mut ResMut<Board>, sprite_query: &mut Query<(&mut Sprite, &Position)>) {
+    for x in 0..MAX_WIDTH {
+        for y in 0..MAX_HEIGHT {
+            let cell = &mut board.0[x as usize][y as usize];
+            if cell.dead {
+                continue;
+            }
+            if cell.decaying && cell.decaying_ticks == 0 {
+                cell.dead = true;
+                let (mut sprite, _) = sprite_query
+                    .iter_mut()
+                    .find(|(_, position)| position.x == x && position.y == y)
+                    .expect("Cell sprite not found");
+                sprite.color = DEAD_COLOR;
+            }
+        }
+    }
+}
+
+fn process_tick(
     time: Res<Time>,
     mut timer: ResMut<FrameTimer>,
     mut board: ResMut<Board>,
@@ -238,24 +204,14 @@ fn kill_cells(
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-
-    for x in 0..MAX_WIDTH {
-        for y in 0..MAX_HEIGHT {
-            let cell = &mut board.0[x as usize][y as usize];
-            if cell.dead {
-                continue;
-            }
-            if cell.decaying && cell.decaying_time == 0 {
-                cell.dead = true;
-                let (mut sprite, _) = sprite_query
-                    .iter_mut()
-                    .find(|(_, position)| position.x == x && position.y == y)
-                    .expect("Cell sprite not found");
-                sprite.color = DEAD_COLOR;
-                // cell_sprite.sprite_bundle.sprite.color = Color::rgb(0.25, 0.25, 0.25);
-            }
-        }
-    }
+    count_neighbors(&mut board);
+    spawn_cells(&mut board, &mut sprite_query);
+    decay_cells(&mut board);
+    kill_cells(&mut board, &mut sprite_query);
+    // count_neighbors,
+    // spawn_cells,
+    // decay_cells,
+    // kill_cells,
 }
 
 fn main() {
@@ -264,7 +220,7 @@ fn main() {
         .insert_resource(board)
         .insert_resource(PrintTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .insert_resource(FrameTimer(Timer::from_seconds(
-            FRAME_TIME,
+            TICK_TIME,
             TimerMode::Repeating,
         )))
         .add_plugins(DefaultPlugins)
@@ -273,10 +229,11 @@ fn main() {
         .add_systems(
             Update,
             (
-                count_neighbors,
-                spawn_cells,
-                decay_cells,
-                kill_cells,
+                process_tick,
+                // count_neighbors,
+                // spawn_cells,
+                // decay_cells,
+                // kill_cells,
                 // print_cells,
             )
                 .chain(),
