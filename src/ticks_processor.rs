@@ -11,14 +11,14 @@ use std::cmp;
 /**
  * Returns a range that is limited to the positive range of \[0, max\]
  */
-fn limited_positive_range(start: usize, end: usize, max: usize) -> std::ops::Range<usize> {
-    return cmp::max(start, 0)..cmp::min(end + 1, max);
+fn limited_positive_range(start: i32, end: i32, max: usize) -> std::ops::Range<usize> {
+    return (cmp::max(start, 0) as usize)..(cmp::min(end + 1, max as i32) as usize);
 }
 
 fn count_cell_neighbors(board: &mut ResMut<Board>, x: usize, y: usize) {
     board.0[x][y].neighbors = 0;
-    for adjacent_x in limited_positive_range(x - 1, x + 1, MAX_WIDTH) {
-        for adjacent_y in limited_positive_range(y - 1, y + 1, MAX_HEIGHT) {
+    for adjacent_x in limited_positive_range(x as i32 - 1, x as i32 + 1, MAX_WIDTH) {
+        for adjacent_y in limited_positive_range(y as i32 - 1, y as i32 + 1, MAX_HEIGHT) {
             if adjacent_x == x && adjacent_y == y {
                 continue;
             }
